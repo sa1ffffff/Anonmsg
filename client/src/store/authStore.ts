@@ -105,30 +105,18 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (get().initialized) return;
     set({ loading: true, initialized: true });
 
-    // Safety net — never stay stuck on loading
-    setTimeout(() => {
-      if (get().loading) set({ loading: false });
-    }, 5000);
-
     try {
-      const url = new URL(window.location.href);
-      const code = url.searchParams.get('code');
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) throw error;
-      }
-
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
       const session = data.session;
 
       if (session?.user) {
-        try {
-          const profile = await ensureProfile(session.user);
-          set({ user: session.user, token: session.access_token, profile, loading: false });
-        } catch {
-          set({ user: session.user, token: session.access_token, profile: null, loading: false });
-        }
+        // Set user immediately, don't wait on DB
+        set({ user: session.user, token: session.access_token, profile: null, loading: false });
+        // Load profile in background
+        ensureProfile(session.user)
+          .then((profile) => set({ profile }))
+          .catch(() => {});
       } else {
         set({ user: null, token: null, profile: null, loading: false });
       }
@@ -140,12 +128,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
     supabase.auth.onAuthStateChange(async (_event, newSession) => {
       if (newSession?.user) {
-        try {
-          const profile = await ensureProfile(newSession.user);
-          set({ user: newSession.user, token: newSession.access_token, profile, loading: false });
-        } catch {
-          set({ user: newSession.user, token: newSession.access_token, profile: null, loading: false });
-        }
+        set({ user: newSession.user, token: newSession.access_token, loading: false });
+        ensureProfile(newSession.user)
+          .then((profile) => set({ profile }))
+          .catch(() => {});
       } else {
         set({ user: null, token: null, profile: null, loading: false });
       }
