@@ -70,6 +70,29 @@ async function ensureProfile(user: User, preferredUsername?: string) {
   throw new Error('Unable to set username');
 }
 
+function clearAuthParams() {
+  const url = new URL(window.location.href);
+  const hasHash =
+    url.hash.includes('access_token') ||
+    url.hash.includes('refresh_token') ||
+    url.hash.includes('error');
+  const hasCode = url.searchParams.has('code');
+  const hasState = url.searchParams.has('state');
+  const hasError = url.searchParams.has('error');
+
+  if (hasHash) {
+    url.hash = '';
+  }
+  if (hasCode) url.searchParams.delete('code');
+  if (hasState) url.searchParams.delete('state');
+  if (hasError) url.searchParams.delete('error');
+
+  if (hasHash || hasCode || hasState || hasError) {
+    const next = `${url.pathname}${url.search}`;
+    window.history.replaceState({}, document.title, next);
+  }
+}
+
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   profile: null,
@@ -80,17 +103,31 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (get().initialized) return;
     set({ loading: true, initialized: true });
 
-    const { data } = await supabase.auth.getSession();
-    const session = data.session;
-
-    if (session?.user) {
-      try {
-        const profile = await ensureProfile(session.user);
-        set({ user: session.user, token: session.access_token, profile });
-      } catch {
-        set({ user: session.user, token: session.access_token, profile: null });
+    try {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get('code');
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) throw error;
       }
-    } else {
+
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      const session = data.session;
+
+      if (session?.user) {
+        try {
+          const profile = await ensureProfile(session.user);
+          set({ user: session.user, token: session.access_token, profile });
+        } catch {
+          set({ user: session.user, token: session.access_token, profile: null });
+        }
+      } else {
+        set({ user: null, token: null, profile: null });
+      }
+
+      clearAuthParams();
+    } catch {
       set({ user: null, token: null, profile: null });
     }
 
