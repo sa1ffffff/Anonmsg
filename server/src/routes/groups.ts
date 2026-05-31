@@ -79,9 +79,22 @@ router.post('/', authenticate, async (req, res) => {
     .select()
     .single();
 
-  if (error || !data) return res.status(500).json({ error: 'Failed to create group' });
+  if (error || !data) {
+    return res.status(500).json({
+      error: error?.message ?? 'Failed to create group',
+      code: error?.code ?? 'unknown',
+    });
+  }
 
-  await supabase.from('group_members').insert({ group_id: data.id, user_id: req.user.id });
+  const { error: memberError } = await supabase
+    .from('group_members')
+    .insert({ group_id: data.id, user_id: req.user.id });
+  if (memberError) {
+    return res.status(500).json({
+      error: memberError.message ?? 'Failed to add member',
+      code: memberError.code ?? 'unknown',
+    });
+  }
   return res.json(data);
 });
 

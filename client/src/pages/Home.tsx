@@ -16,6 +16,7 @@ export default function Home() {
   const [description, setDescription] = useState('');
   const [invite, setInvite] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (token) {
@@ -26,11 +27,15 @@ export default function Home() {
   const handleCreate = async () => {
     if (!token || !name.trim()) return;
     setSaving(true);
+    setError(null);
     try {
       const group = await createGroup(token, { name: name.trim(), description: description.trim() });
       setName('');
       setDescription('');
       navigate(`/chat/${group.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create room';
+      setError(message);
     } finally {
       setSaving(false);
     }
@@ -97,6 +102,7 @@ export default function Home() {
             >
               {saving ? 'Creating…' : 'Create room'}
             </button>
+            {error && <div className="text-sm text-red-400">{error}</div>}
           </div>
         </section>
 
