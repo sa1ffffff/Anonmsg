@@ -54,7 +54,10 @@ async function ensureProfile(user: User, preferredUsername?: string) {
   const avatar = (user.user_metadata?.avatar_url as string | undefined) ?? null;
 
   for (let i = 0; i < 3; i += 1) {
-    const username = i === 0 ? base : normalizeUsername(`${base}${Math.floor(Math.random() * 1000)}`);
+    const username =
+      i === 0
+        ? base
+        : normalizeUsername(`${base}${Math.floor(Math.random() * 1000)}`);
     const { data, error } = await supabase
       .from('profiles')
       .upsert({ id: user.id, username, avatar_url: avatar }, { onConflict: 'id' })
@@ -80,9 +83,7 @@ function clearAuthParams() {
   const hasState = url.searchParams.has('state');
   const hasError = url.searchParams.has('error');
 
-  if (hasHash) {
-    url.hash = '';
-  }
+  if (hasHash) url.hash = '';
   if (hasCode) url.searchParams.delete('code');
   if (hasState) url.searchParams.delete('state');
   if (hasError) url.searchParams.delete('error');
@@ -99,9 +100,15 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   token: null,
   loading: true,
   initialized: false,
+
   init: async () => {
     if (get().initialized) return;
     set({ loading: true, initialized: true });
+
+    // Safety net — never stay stuck on loading
+    setTimeout(() => {
+      if (get().loading) set({ loading: false });
+    }, 5000);
 
     try {
       const url = new URL(window.location.href);
@@ -143,8 +150,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         set({ user: null, token: null, profile: null, loading: false });
       }
     });
-
   },
+
   signIn: async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
@@ -153,6 +160,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({ user: data.session.user, token: data.session.access_token, profile });
     }
   },
+
   signUp: async (email, password, username) => {
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -164,6 +172,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       await ensureProfile(data.user, username);
     }
   },
+
   signInWithGoogle: async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -171,6 +180,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     });
     if (error) throw error;
   },
+
   signOut: async () => {
     await supabase.auth.signOut();
     disconnectSocket();
