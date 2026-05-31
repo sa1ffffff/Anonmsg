@@ -7,7 +7,7 @@ import { GroupPreview, useGroupStore } from '../store/groupStore';
 export default function Join() {
   const { inviteCode } = useParams();
   const navigate = useNavigate();
-  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const signIn = useAuthStore((s) => s.signIn);
   const signInWithGoogle = useAuthStore((s) => s.signInWithGoogle);
   const joinGroup = useGroupStore((s) => s.joinGroup);
@@ -30,20 +30,20 @@ export default function Join() {
   }, [inviteCode, fetchPreview]);
 
   useEffect(() => {
-    if (!token || !pendingJoin || !inviteCode) return;
-    joinGroup(token, inviteCode)
+    if (!user || !pendingJoin || !inviteCode) return;
+    joinGroup(inviteCode)
       .then((group) => navigate(`/chat/${group.id}`))
       .catch((err) => setError(err.message))
       .finally(() => setPendingJoin(false));
-  }, [token, pendingJoin, inviteCode, joinGroup, navigate]);
+  }, [user, pendingJoin, inviteCode, joinGroup, navigate]);
 
   const handleJoin = () => {
     if (!inviteCode) return;
-    if (!token) {
+    if (!user) {
       setPendingJoin(true);
       return;
     }
-    joinGroup(token, inviteCode)
+    joinGroup(inviteCode)
       .then((group) => navigate(`/chat/${group.id}`))
       .catch((err) => setError(err.message));
   };
@@ -99,7 +99,7 @@ export default function Join() {
         )}
       </div>
 
-      {!token && (
+      {!user && (
         <div className="mt-8 bg-bg-elevated border border-border-subtle rounded-lg p-6 shadow-soft">
           <h2 className="text-lg font-display">Log in to join</h2>
           <div className="mt-4 space-y-3">

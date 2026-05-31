@@ -6,7 +6,7 @@ import { useGroupStore } from '../store/groupStore';
 
 export default function Home() {
   const navigate = useNavigate();
-  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const profile = useAuthStore((s) => s.profile);
   const groups = useGroupStore((s) => s.groups);
   const loading = useGroupStore((s) => s.loading);
@@ -19,17 +19,17 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (token) {
-      fetchGroups(token).catch(() => undefined);
+    if (user) {
+      fetchGroups().catch(() => undefined);
     }
-  }, [token, fetchGroups]);
+  }, [user, fetchGroups]);
 
   const handleCreate = async () => {
-    if (!token || !name.trim()) return;
+    if (!user || !name.trim()) return;
     setSaving(true);
     setError(null);
     try {
-      const group = await createGroup(token, { name: name.trim(), description: description.trim() });
+      const group = await createGroup({ name: name.trim(), description: description.trim() });
       setName('');
       setDescription('');
       navigate(`/chat/${group.id}`);

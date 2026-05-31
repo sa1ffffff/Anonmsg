@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { disconnectSocket } from '../lib/socket';
 
 interface Profile {
   id: string;
@@ -73,27 +72,6 @@ async function ensureProfile(user: User, preferredUsername?: string) {
   throw new Error('Unable to set username');
 }
 
-function clearAuthParams() {
-  const url = new URL(window.location.href);
-  const hasHash =
-    url.hash.includes('access_token') ||
-    url.hash.includes('refresh_token') ||
-    url.hash.includes('error');
-  const hasCode = url.searchParams.has('code');
-  const hasState = url.searchParams.has('state');
-  const hasError = url.searchParams.has('error');
-
-  if (hasHash) url.hash = '';
-  if (hasCode) url.searchParams.delete('code');
-  if (hasState) url.searchParams.delete('state');
-  if (hasError) url.searchParams.delete('error');
-
-  if (hasHash || hasCode || hasState || hasError) {
-    const next = `${url.pathname}${url.search}`;
-    window.history.replaceState({}, document.title, next);
-  }
-}
-
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   profile: null,
@@ -105,31 +83,28 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (get().initialized) return;
     set({ loading: true, initialized: true });
 
+    // Set up auth state listener FIRST so we catch the session from OAuth callback.
+    // Supabase SDK with detectSessionInUrl:true + flowType:'pkce' automatically
+    // detects ?code= in the URL, exchanges it, and fires this callback.
+    supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (newSession?.user) {
+        set({ user: newSession.user, token: newSession.access_token, loading: false });
+        ensureProfile(newSession.user)
+          .then((profile) => set({ profile }))
+          .catch(() => {});
+      } else if (event === 'SIGNED_OUT') {
+        set({ user: null, token: null, profile: null, loading: false });
+      }
+    });
+
     try {
-      const url = new URL(window.location.href);
-      const code = url.searchParams.get('code');
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) throw error;
-      }
-
-      const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
-      const accessToken = hashParams.get('access_token');
-      const refreshToken = hashParams.get('refresh_token');
-      if (accessToken && refreshToken) {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-        if (error) throw error;
-      }
-
+      // getSession() will also trigger the SDK to process any ?code= or #access_token=
+      // in the URL if it hasn't already.
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
       const session = data.session;
 
       if (session?.user) {
-        // Set user immediately, don't wait on DB
         set({ user: session.user, token: session.access_token, profile: null, loading: false });
         // Load profile in background
         ensureProfile(session.user)
@@ -138,22 +113,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       } else {
         set({ user: null, token: null, profile: null, loading: false });
       }
-
-      clearAuthParams();
     } catch {
       set({ user: null, token: null, profile: null, loading: false });
     }
-
-    supabase.auth.onAuthStateChange(async (_event, newSession) => {
-      if (newSession?.user) {
-        set({ user: newSession.user, token: newSession.access_token, loading: false });
-        ensureProfile(newSession.user)
-          .then((profile) => set({ profile }))
-          .catch(() => {});
-      } else {
-        set({ user: null, token: null, profile: null, loading: false });
-      }
-    });
   },
 
   signIn: async (email, password) => {
@@ -187,7 +149,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   signOut: async () => {
     await supabase.auth.signOut();
-    disconnectSocket();
     set({ user: null, token: null, profile: null });
   },
-}));
+}));

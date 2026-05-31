@@ -1,16 +1,24 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '../store/authStore';
 
 export default function Register() {
   const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const loading = useAuthStore((s) => s.loading);
   const signUp = useAuthStore((s) => s.signUp);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // If the user is already authenticated, go home
+  if (!loading && user) {
+    return <Navigate to="/" replace />;
+  }
+
 
   const handleRegister = async () => {
     setError(null);

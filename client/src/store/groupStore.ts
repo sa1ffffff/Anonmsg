@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { apiFetch } from '../lib/api';
+import { supabase } from '../lib/supabase';
 
 export interface Group {
   id: string;
@@ -21,47 +21,139 @@ export interface GroupPreview {
 interface GroupStore {
   groups: Group[];
   loading: boolean;
-  fetchGroups: (token: string) => Promise<void>;
-  createGroup: (token: string, payload: { name: string; description?: string }) => Promise<Group>;
-  joinGroup: (token: string, inviteCode: string) => Promise<Group>;
-  fetchGroup: (token: string, groupId: string) => Promise<Group>;
+  fetchGroups: () => Promise<void>;
+  createGroup: (payload: { name: string; description?: string }) => Promise<Group>;
+  joinGroup: (inviteCode: string) => Promise<Group>;
+  fetchGroup: (groupId: string) => Promise<Group>;
   fetchGroupPreview: (inviteCode: string) => Promise<GroupPreview>;
 }
 
 export const useGroupStore = create<GroupStore>((set) => ({
   groups: [],
   loading: false,
-  fetchGroups: async (token) => {
+  fetchGroups: async () => {
     set({ loading: true });
     try {
-      const data = await apiFetch<Group[]>('/api/groups', token);
-      set({ groups: data, loading: false });
-    } catch {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) throw new Error('Not signed in');
+
+      const { data, error } = await supabase
+        .from('group_members')
+        .select('group:groups(id, name, description, invite_code, created_by), joined_at')
+        .eq('user_id', userData.user.id)
+        .order('joined_at', { ascending: false });
+
+      if (error) throw error;
+
+      const groups =
+        data
+          ?.map((row) => row.group)
+          .filter((group): group is Group => Boolean(group)) ?? [];
+      set({ groups, loading: false });
+    } catch (err) {
       set({ loading: false });
+      throw err;
     }
   },
-  createGroup: async (token, payload) => {
-    const data = await apiFetch<Group>('/api/groups', token, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    set((state) => ({ groups: [data, ...state.groups] }));
-    return data;
+  createGroup: async (payload) => {
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData.user) throw new Error('Not signed in');
+
+    const { data: group, error: groupError } = await supabase
+      .from('groups')
+      .insert({
+        name: payload.name.trim(),
+        description: payload.description?.trim() || null,
+        created_by: userData.user.id,
+      })
+      .select('id, name, description, invite_code, created_by')
+      .single();
+
+    if (groupError || !group) throw groupError ?? new Error('Failed to create group');
+
+    const { error: memberError } = await supabase
+      .from('group_members')
+      .insert({ group_id: group.id, user_id: userData.user.id });
+
+    if (memberError) throw memberError;
+
+    set((state) => ({ groups: [group, ...state.groups] }));
+    return group;
   },
-  joinGroup: async (token, inviteCode) => {
-    const data = await apiFetch<{ group: Group }>(`/api/groups/join/${inviteCode}`, token, {
-      method: 'POST',
-    });
+  joinGroup: async (inviteCode) => {
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData.user) throw new Error('Not signed in');
+
+    const { data: group, error: groupError } = await supabase
+      .from('groups')
+      .select('id, name, description, invite_code, created_by')
+      .eq('invite_code', inviteCode)
+      .single();
+
+    if (groupError || !group) throw groupError ?? new Error('Invalid invite code');
+
+    const { error: memberError } = await supabase
+      .from('group_members')
+      .upsert({ group_id: group.id, user_id: userData.user.id }, { onConflict: 'group_id,user_id' });
+
+    if (memberError) throw memberError;
+
     set((state) => {
-      const exists = state.groups.find((g) => g.id === data.group.id);
-      return { groups: exists ? state.groups : [data.group, ...state.groups] };
+      const exists = state.groups.find((g) => g.id === group.id);
+      return { groups: exists ? state.groups : [group, ...state.groups] };
     });
-    return data.group;
+    return group;
   },
-  fetchGroup: async (token, groupId) => {
-    return apiFetch<Group>(`/api/groups/${groupId}`, token);
+  fetchGroup: async (groupId) => {
+    const { data: group, error } = await supabase
+      .from('groups')
+      .select('id, name, description, invite_code, created_by')
+      .eq('id', groupId)
+      .single();
+
+    if (error || !group) throw error ?? new Error('Group not found');
+
+    const { count, error: countError } = await supabase
+      .from('group_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('group_id', groupId);
+
+    if (countError) throw countError;
+
+    return { ...group, member_count: count ?? 0 };
   },
   fetchGroupPreview: async (inviteCode) => {
-    return apiFetch<GroupPreview>(`/api/groups/invite/${inviteCode}`);
+    const { data: group, error } = await supabase
+      .from('groups')
+      .select('id, name, description')
+      .eq('invite_code', inviteCode)
+      .single();
+
+    if (error || !group) throw error ?? new Error('Invalid invite code');
+
+    const { data: members, error: memberError } = await supabase
+      .from('group_members')
+      .select('user_id, profiles(id, username, avatar_url)')
+      .eq('group_id', group.id);
+
+    if (memberError) throw memberError;
+
+    const member_avatars =
+      members
+        ?.map((row) =>
+          Array.isArray(row.profiles) ? row.profiles[0] : row.profiles,
+        )
+        .filter(Boolean)
+        .map((profile) => ({
+          id: profile!.id,
+          username: profile!.username,
+          avatar_url: profile!.avatar_url,
+        })) ?? [];
+
+    return {
+      ...group,
+      member_count: member_avatars.length,
+      member_avatars,
+    };
   },
 }));

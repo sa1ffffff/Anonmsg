@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiFetch } from '../../lib/api';
+import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/authStore';
 import MemberCard from './MemberCard';
 
@@ -23,27 +23,49 @@ export default function MemberList({
   canRemove,
   currentUserId,
 }: MemberListProps) {
-  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
+    if (!user) return;
     setLoading(true);
-    apiFetch<Member[]>(`/api/members/${groupId}`, token)
-      .then((data) => setMembers(data))
-      .catch((err) => setError(err.message))
+    supabase
+      .from('group_members')
+      .select('user_id, joined_at, profiles(id, username, avatar_url)')
+      .eq('group_id', groupId)
+      .order('joined_at', { ascending: true })
+      .then(({ data, error: fetchError }) => {
+        if (fetchError) throw fetchError;
+        const mapped =
+          data?.map((row) => {
+            const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+            return {
+              id: profile?.id ?? row.user_id,
+              username: profile?.username ?? 'Member',
+              avatar_url: profile?.avatar_url ?? null,
+              joined_at: row.joined_at,
+            };
+          }) ?? [];
+        setMembers(mapped);
+      })
+      .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
-  }, [groupId, token]);
+  }, [groupId, user]);
 
   const removeMember = async (memberId: string) => {
-    if (!token) return;
+    if (!user) return;
     setRemovingId(memberId);
     setError(null);
     try {
-      await apiFetch(`/api/members/${groupId}/${memberId}`, token, { method: 'DELETE' });
+      const { error: removeError } = await supabase
+        .from('group_members')
+        .delete()
+        .eq('group_id', groupId)
+        .eq('user_id', memberId);
+      if (removeError) throw removeError;
       setMembers((current) => current.filter((member) => member.id !== memberId));
     } catch (err) {
       setError((err as Error).message);

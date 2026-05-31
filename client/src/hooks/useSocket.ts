@@ -1,60 +1,128 @@
 import { useEffect, useRef } from 'react';
-import { getSocket } from '../lib/socket';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+import { getSessionAlias } from '../lib/alias';
 import { useChatStore } from '../store/chatStore';
-import { useAuthStore } from '../store/authStore';
 
 export function useSocket(groupId: string) {
-  const token = useAuthStore((s) => s.token);
   const { addMessage, setTyping, updateReaction } = useChatStore();
   const typingTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const aliasRef = useRef(getSessionAlias());
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
-    if (!token || !groupId) return;
-    const socket = getSocket(token);
+    if (!groupId) return;
+    const channel = supabase.channel(`group:${groupId}`, {
+      config: { broadcast: { self: false } },
+    });
+    channelRef.current = channel;
 
-    const joinRoom = () => socket.emit('join_group', groupId);
-    joinRoom();
-    socket.on('connect', joinRoom);
-    socket.on('new_message', (message) => addMessage(groupId, message));
-    socket.on('reaction_update', ({ messageId, emoji, count }) =>
-      updateReaction(groupId, messageId, emoji, count),
-    );
-    socket.on('user_typing', ({ alias }) => setTyping(groupId, alias, true));
-    socket.on('user_stopped_typing', ({ alias }) => setTyping(groupId, alias, false));
+    channel
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `group_id=eq.${groupId}` },
+        (payload) => {
+          const message = payload.new as {
+            id: string;
+            content: string;
+            alias: string;
+            sent_at: string;
+          };
+          addMessage(groupId, { ...message, reactions: {} });
+        },
+      )
+      .on('broadcast', { event: 'reaction_update' }, ({ payload }) => {
+        if (!payload) return;
+        updateReaction(groupId, payload.messageId, payload.emoji, payload.count);
+      })
+      .on('broadcast', { event: 'typing_start' }, ({ payload }) => {
+        if (!payload?.alias) return;
+        setTyping(groupId, payload.alias, true);
+      })
+      .on('broadcast', { event: 'typing_stop' }, ({ payload }) => {
+        if (!payload?.alias) return;
+        setTyping(groupId, payload.alias, false);
+      })
+      .subscribe();
 
     return () => {
-      socket.off('connect', joinRoom);
-      socket.off('new_message');
-      socket.off('reaction_update');
-      socket.off('user_typing');
-      socket.off('user_stopped_typing');
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
     };
-  }, [groupId, token, addMessage, updateReaction, setTyping]);
+  }, [groupId, addMessage, updateReaction, setTyping]);
 
-  const sendMessage = (content: string) => {
-    if (!token) return;
-    const socket = getSocket(token);
-    socket.emit('send_message', { groupId, content });
+  const sendMessage = async (content: string) => {
+    const trimmed = content.trim().slice(0, 1000);
+    if (!trimmed) return;
+    const sanitized = trimmed.replace(/<[^>]*>/g, '').trim();
+    if (!sanitized) return;
+
+    const alias = aliasRef.current;
+    const { error } = await supabase
+      .from('messages')
+      .insert({ group_id: groupId, content: sanitized, alias })
+      .select('id')
+      .single();
+    if (error) throw error;
   };
 
   const sendTyping = (isTyping: boolean) => {
-    if (!token) return;
-    const socket = getSocket(token);
+    const channel = channelRef.current;
+    if (!channel) return;
     if (isTyping) {
-      socket.emit('typing_start', { groupId });
+      channel.send({
+        type: 'broadcast',
+        event: 'typing_start',
+        payload: { alias: aliasRef.current },
+      });
       clearTimeout(typingTimeout.current);
       typingTimeout.current = setTimeout(() => {
-        socket.emit('typing_stop', { groupId });
+        channel.send({
+          type: 'broadcast',
+          event: 'typing_stop',
+          payload: { alias: aliasRef.current },
+        });
       }, 3000);
     } else {
-      socket.emit('typing_stop', { groupId });
+      channel.send({
+        type: 'broadcast',
+        event: 'typing_stop',
+        payload: { alias: aliasRef.current },
+      });
     }
   };
 
-  const sendReaction = (messageId: string, emoji: string) => {
-    if (!token) return;
-    const socket = getSocket(token);
-    socket.emit('add_reaction', { groupId, messageId, emoji });
+  const sendReaction = async (messageId: string, emoji: string) => {
+    const { data: existing, error: existingError } = await supabase
+      .from('reactions')
+      .select('id, count')
+      .eq('message_id', messageId)
+      .eq('emoji', emoji)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+
+    let count = 1;
+    if (existing) {
+      count = existing.count + 1;
+      const { error } = await supabase.from('reactions').update({ count }).eq('id', existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase.from('reactions').insert({
+        message_id: messageId,
+        emoji,
+        count,
+      });
+      if (error) throw error;
+    }
+
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'reaction_update',
+      payload: { messageId, emoji, count },
+    });
   };
 
   return { sendMessage, sendTyping, sendReaction };
