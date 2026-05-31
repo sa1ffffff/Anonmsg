@@ -118,17 +118,17 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (session?.user) {
         try {
           const profile = await ensureProfile(session.user);
-          set({ user: session.user, token: session.access_token, profile });
+          set({ user: session.user, token: session.access_token, profile, loading: false });
         } catch {
-          set({ user: session.user, token: session.access_token, profile: null });
+          set({ user: session.user, token: session.access_token, profile: null, loading: false });
         }
       } else {
-        set({ user: null, token: null, profile: null });
+        set({ user: null, token: null, profile: null, loading: false });
       }
 
       clearAuthParams();
     } catch {
-      set({ user: null, token: null, profile: null });
+      set({ user: null, token: null, profile: null, loading: false });
     }
 
     supabase.auth.onAuthStateChange(async (_event, newSession) => {
@@ -144,7 +144,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
     });
 
-    set({ loading: false });
   },
   signIn: async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
