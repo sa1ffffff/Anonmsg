@@ -106,6 +106,24 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({ loading: true, initialized: true });
 
     try {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get('code');
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) throw error;
+      }
+
+      const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+      const accessToken = hashParams.get('access_token');
+      const refreshToken = hashParams.get('refresh_token');
+      if (accessToken && refreshToken) {
+        const { error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (error) throw error;
+      }
+
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
       const session = data.session;
